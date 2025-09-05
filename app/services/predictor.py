@@ -21,18 +21,19 @@ def _weighted_log_mean(values: np.ndarray, weights: np.ndarray) -> float:
     w = np.asarray(weights, dtype="float64")
     return float(np.exp((w * np.log(v)).sum()))
 
-def predict_initial_budget(query_vec_1: np.ndarray,
-                           query_vec_2: np.ndarray | None = None) -> dict[str, Any]:
-    """当初予算の推定とTop-K根拠を返す。"""
-    data: BudgetData = load_budget_data()
-    X1_n = _normalize_rows(data.X1)
-    X2_n = _normalize_rows(data.X2)
-    Q1_n = _normalize_rows(np.asarray(query_vec_1, "float32"))
-    Q2_n = _normalize_rows(np.asarray(query_vec_2, "float32")) if query_vec_2 is not None else None
+def predict_initial_budget(query_vec: np.ndarray) -> dict[str, Any]:
+    """当初予算の推定とTop-K根拠を返す（単一クエリベクトル）。
 
-    S1 = Q1_n @ X1_n.T
-    S2 = Q2_n @ X2_n.T if Q2_n is not None else 0.0
-    S  = settings.ALPHA * S1 + settings.BETA * (S2 if isinstance(S2, np.ndarray) else 0.0)
+    既存の X1（目的・課題の埋め込み）のみを使用し、線形結合は行わない。
+    """
+    data: BudgetData = load_budget_data()
+    X_n = _normalize_rows(data.X1)
+    Q_n = _normalize_rows(np.asarray(query_vec, "float32"))
+
+    if Q_n.shape[1] != X_n.shape[1]:
+        return {"can_estimate": False, "reason": f"query dim {Q_n.shape[1]} != X1 dim {X_n.shape[1]}"}
+
+    S = Q_n @ X_n.T
 
     scores = S[0]  # 単一クエリ想定
     K = int(min(settings.TOPK, scores.shape[0]))
@@ -54,16 +55,29 @@ def predict_initial_budget(query_vec_1: np.ndarray,
 
     est_init = _weighted_log_mean(init_f, w_f)
 
+    # 現額の推定（任意）
+    est_final: float | None = None
+    if data.y_final is not None:
+        yfin_all = np.asarray(data.y_final[idx].astype("float64"))
+        mask_fin = np.isfinite(yfin_all) & (yfin_all > 0)
+        if mask_fin.any():
+            yfin = yfin_all[mask_fin]
+            w_fin = weights[mask_fin]
+            w_fin = w_fin / (w_fin.sum() + 1e-12)
+            est_final = _weighted_log_mean(yfin, w_fin)
+
     # 根拠テーブル
     df = data.df
     col_name   = "事業名" if "事業名" in df.columns else None
     col_init   = "当初予算" if "当初予算" in df.columns else None
+    col_final  = "歳出予算現額" if "歳出予算現額" in df.columns else None
 
     rows = []
     for rank, j in enumerate(idx[mask], 1):
         row = df.iloc[int(j)]
         name  = row[col_name] if col_name else ""
         y0    = float(row[col_init]) if col_init and pd.notna(row[col_init]) else float("nan")
+        yfin  = float(row[col_final]) if col_final and pd.notna(row[col_final]) else float("nan")
         rows.append({
             "rank": rank,
             "df_index": int(j),
@@ -71,11 +85,14 @@ def predict_initial_budget(query_vec_1: np.ndarray,
             "weight": float(w_f[rank-1]),
             "name": name,
             "initial_budget": y0,
+            "final_budget": yfin,
         })
 
     return {
         "can_estimate": True,
         "estimate_initial": est_init,
+        "estimate_final": est_final,
+        "ratio": (est_final / est_init) if (est_final is not None and est_init > 0) else None,
         "currency": "JPY",
         "topk": rows
     }

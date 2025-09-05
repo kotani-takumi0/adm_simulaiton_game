@@ -5,6 +5,7 @@ from app.api.v1.state import router as state_router
 from app.api.v1.events import router as events_router
 from app.api.v1.budget import router as budget_router
 from app.core.config import settings
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Policy Game API", version="0.1.0")
 
@@ -26,3 +27,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Static UI (simple test frontend)
+app.mount("/ui", StaticFiles(directory="web", html=True), name="ui")

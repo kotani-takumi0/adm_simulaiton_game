@@ -10,6 +10,8 @@
   - `uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`
 - Health check:
   - `curl -iS http://127.0.0.1:8000/health`
+ - Simple UI:
+   - Open `http://127.0.0.1:8000/ui/` in your browser
 - Start a session:
   - `curl -iS -X POST http://127.0.0.1:8000/v1/state/start`
 - Next event (replace SESSION):
@@ -35,6 +37,28 @@
 
 ## Notes
 - Budget prediction `/v1/budget/predict` requires data files under `data/`:
-  - `embeddings.npz` with arrays `X1`, `X2` (optional), `y_init`, `y_final` (optional)
-  - `events.parquet` or `events.csv` for metadata
+  - If `adm_game.parquet` exists: uses column `embedding_sum` as embeddings (single `X1`), and tries `当初予算`/`歳出予算現額` for targets/metadata.
+  - Otherwise falls back to `embeddings.npz` with arrays `X1`, `X2` (optional), `y_init`, `y_final` (optional), and metadata DataFrame from `events.parquet|selected_game.csv|events.csv`.
+- Game events catalog is read from `data/selected_game.csv` and used to schedule yearly events and to return event metadata from `/v1/events/next`.
+- Simple UI is available at `/ui/` for manual testing (predict, session/events).
+ - UI renders human-friendly results: 推定当初予算/推定現額/推定増減率 and a Top-K table (rank, 類似度, 重み, 事業名, 当初予算, 現額).
+
+### Prediction API
+- Request: `POST /v1/budget/predict`
+  - Body: `{ "query_text": string }` → サーバ側で埋め込みして推定
+- Notes:
+  - Server-side embedding provider is configurable:
+    - `EMBEDDING_PROVIDER=dummy` (default): ダミー埋め込み（トークン毎の安定ランダム）
+    - `EMBEDDING_PROVIDER=openai`: OpenAI Embeddings API を使用（`OPENAI_API_KEY` 必須、`OPENAI_EMBEDDING_MODEL` 既定は `text-embedding-3-large`）
+  - OpenAI で推論する場合、学習データ（`adm_game.parquet` の `embedding_sum`）も同一モデルで作成した埋め込みである必要があります（次元一致が必須）。
+  - Prediction uses only `X1` embeddings with cosine similarity and no linear combination.
+  - `TOPK` and `TAU` in `app/core/config.py` control neighbor count and softmax temperature.
+
+### Configure OpenAI Embeddings (optional)
+- Install deps: already in `requirements.txt` (`openai`)
+- Set env vars (e.g. `.env`):
+  - `EMBEDDING_PROVIDER=openai`
+  - `OPENAI_API_KEY=sk-...`
+  - `OPENAI_EMBEDDING_MODEL=text-embedding-3-large` (default 3072 dims)
+  - `OPENAI_BASE_URL=...` (Azureや互換エンドポイント利用時のみ)
 - Config is in `app/core/config.py`. You can override via `.env`.

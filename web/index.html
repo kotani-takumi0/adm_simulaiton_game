@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Policy Game | 予算推定デモ</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script>
+    const api = (path, init) => fetch(path, init).then(async r => {
+      const text = await r.text();
+      let data; try { data = JSON.parse(text); } catch { data = text; }
+      if (!r.ok) {
+        throw { status: r.status, data };
+      }
+      return data;
+    });
+
+    async function loadInfo() {
+      const out = document.getElementById('info');
+      out.textContent = 'loading...';
+      try {
+        const info = await api('/v1/budget/model_info');
+        out.textContent = JSON.stringify(info, null, 2);
+        const dim = info.x_dim;
+        document.getElementById('dim').textContent = `x_dim=${dim}, items=${info.n_items}`;
+      } catch (e) {
+        out.textContent = `error: ${e.status} \n` + JSON.stringify(e.data, null, 2);
+      }
+    }
+
+    function yen(n) {
+      if (n === null || n === undefined || isNaN(n)) return '';
+      try { return Number(n).toLocaleString('ja-JP'); } catch { return String(n); }
+    }
+
+    async function predictText() {
+      const t = document.getElementById('query_text').value;
+      const out = document.getElementById('pred');
+      out.textContent = 'predicting (text)...';
+      try {
+        const res = await api('/v1/budget/predict', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query_text: t })
+        });
+        // Render pretty output
+        let html = '';
+        html += '<div>✅ 推定結果</div>';
+        html += `<div>推定当初予算 : ${yen(res.estimate_initial)} 円</div>`;
+        if (res.estimate_final !== null && res.estimate_final !== undefined) {
+          html += `<div>推定現額     : ${yen(res.estimate_final)} 円</div>`;
+          if (res.ratio !== null && res.ratio !== undefined) {
+            html += `<div>推定増減率   : ${Number(res.ratio).toFixed(2)} 倍</div>`;
+          }
+        }
+        html += '<br/>';
+        html += '<div>Top-K 類似事業</div>';
+        if (Array.isArray(res.topk) && res.topk.length) {
+          html += '<table border="1" cellspacing="0" cellpadding="4"><tr>' +
+                  '<th>rank</th><th>類似度</th><th>重み</th><th>事業名</th><th>当初予算</th><th>現額</th></tr>';
+          for (const r of res.topk) {
+            html += `<tr><td>${r.rank}</td><td>${(r.similarity??0).toFixed(3)}</td>` +
+                    `<td>${(r.weight??0).toFixed(3)}</td>` +
+                    `<td>${r.name ?? ''}</td>` +
+                    `<td style="text-align:right">${yen(r.initial_budget)}</td>` +
+                    `<td style="text-align:right">${yen(r.final_budget)}</td></tr>`;
+          }
+          html += '</table>';
+        } else {
+          html += '<div class="muted">類似事業はありません</div>';
+        }
+        out.innerHTML = html;
+      } catch (e) {
+        out.textContent = `error: ${e.status} \n` + JSON.stringify(e.data, null, 2);
+      }
+    }
+
+    async function startSession() {
+      const out = document.getElementById('session');
+      const metaOut = document.getElementById('start_events_meta');
+      out.textContent = 'starting...';
+      metaOut.innerHTML = '';
+      try {
+        const idsRaw = document.getElementById('event_ids_input').value.trim();
+        let body = undefined;
+        if (idsRaw) {
+          const ids = idsRaw.split(',').map(s=>s.trim()).filter(Boolean);
+          body = JSON.stringify({ event_ids: ids });
+        }
+        const s = await api('/v1/state/start', {
+          method: 'POST', headers: body? { 'Content-Type': 'application/json' } : undefined, body
+        });
+        out.textContent = JSON.stringify(s, null, 2);
+        document.getElementById('session_id').textContent = s.session_id;
+
+        // Render chosen events' name and issue
+        if (Array.isArray(s.events_meta) && s.events_meta.length) {
+          let html = '<h3>選定イベント一覧</h3>';
+          html += '<table border="1" cellspacing="0" cellpadding="4"><tr>' +
+                  '<th>予算事業ID</th><th>事業名</th><th>現状・課題</th></tr>';
+          for (const r of s.events_meta) {
+            html += `<tr><td>${(r['予算事業ID'] ?? '')}</td>` +
+                    `<td>${(r['事業名'] ?? '')}</td>` +
+                    `<td>${(r['現状・課題'] ?? '')}</td></tr>`;
+          }
+          html += '</table>';
+          metaOut.innerHTML = html;
+        }
+      } catch (e) {
+        out.textContent = `error: ${e.status}\n` + JSON.stringify(e.data, null, 2);
+      }
+    }
+
+    async function nextEvent() {
+      const sid = document.getElementById('session_id').textContent.trim();
+      const out = document.getElementById('event');
+      if (!sid) { alert('先にセッションを開始してください'); return; }
+      out.textContent = 'loading next event...';
+      try {
+        const url = `/v1/events/next?session_id=${encodeURIComponent(sid)}`;
+        const ev = await api(url);
+        out.textContent = JSON.stringify(ev, null, 2);
+      } catch (e) {
+        out.textContent = `error: ${e.status}\n` + JSON.stringify(e.data, null, 2);
+      }
+    }
+
+    async function loadOverview() {
+      const box = document.getElementById('overview_content');
+      box.innerHTML = 'loading...';
+      try {
+        const m = await api('/v1/events/overview');
+        let html = '';
+        html += `<div class="headline">${m['事業名'] ?? ''}</div>`;
+        html += `<div><h3>課題（現状・課題）</h3><div class="code">${(m['現状・課題'] ?? m['genjo_kadai'] ?? '').replace(/\n/g,'<br>')}</div></div>`;
+        box.innerHTML = html;
+      } catch (e) {
+        box.innerHTML = `error: ${e.status}<br><pre class="code">${JSON.stringify(e.data, null, 2)}</pre>`;
+      }
+    }
+    // ---- Overview schedule (random, no-repeat, 60 months) ----
+    const S_KEY = 'pg_overview_schedule_v1';
+    function shuffle(arr){
+      for(let i=arr.length-1;i>0;i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [arr[i],arr[j]] = [arr[j],arr[i]];
+      }
+      return arr;
+    }
+    async function initSchedule(){
+      let state = null;
+      try{ state = JSON.parse(localStorage.getItem(S_KEY) || 'null'); }catch{}
+      if(state && Array.isArray(state.ids) && typeof state.idx==='number'){
+        return state;
+      }
+      const ids = await api('/v1/events/ids');
+      const ids60 = ids.slice(0, 60);
+      shuffle(ids60);
+      state = { ids: ids60, idx: 0 };
+      localStorage.setItem(S_KEY, JSON.stringify(state));
+      return state;
+    }
+    function saveSchedule(state){ localStorage.setItem(S_KEY, JSON.stringify(state)); }
+    function idxToPeriod(idx){
+      const year = Math.floor(idx/12) + 1;
+      const month = (idx % 12) + 1;
+      return {year, month};
+    }
+    async function renderOverview(state){
+      const box = document.getElementById('overview_content');
+      const btn = document.getElementById('btn_next_overview');
+      const label = document.getElementById('period_label');
+      const total = state.ids.length;
+      if(state.idx >= total){
+        btn.disabled = true;
+        label.textContent = 'ゲーム終了';
+        box.innerHTML = '<div class="muted">全てのイベントを表示しました</div>';
+        return;
+      }
+      const {year, month} = idxToPeriod(state.idx);
+      label.textContent = `${year}年 ${month}月`;
+      box.innerHTML = 'loading...';
+      try{
+        const id = state.ids[state.idx];
+        const m = await api(`/v1/events/meta?budget_id=${encodeURIComponent(id)}`);
+        let html = '';
+        html += `<div class="headline">${m['事業名'] ?? m['jigyo_mei'] ?? ''}</div>`;
+        html += `<div><h3>課題（現状・課題）</h3><div class="code">${(m['現状・課題'] ?? m['genjo_kadai'] ?? '').replace(/\n/g,'<br>')}</div></div>`;
+        box.innerHTML = html;
+      }catch(e){
+        box.innerHTML = `error: ${e.status}<br><pre class="code">${JSON.stringify(e.data, null, 2)}</pre>`;
+      }
+    }
+    async function loadOverview(){
+      const state = await initSchedule();
+      await renderOverview(state);
+    }
+    async function nextOverview(){
+      const state = await initSchedule();
+      state.idx += 1;
+      if(state.idx > state.ids.length) state.idx = state.ids.length;
+      saveSchedule(state);
+      await renderOverview(state);
+    }
+  </script>
+</head>
+<body onload="loadOverview()">
+  <header class="site-header">
+    <div class="container">
+      <div class="brand">Policy Game</div>
+      <nav class="nav">
+        <a href="#predict">予算推定</a>
+        <a href="#events">イベント</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="overview" class="card">
+      <h2>目的と課題</h2>
+      <div class="actions">
+        <span class="muted" id="period_label"></span>
+        <button class="btn" id="btn_next_overview" onclick="nextOverview()">更新</button>
+      </div>
+      <div id="overview_content" class="result"></div>
+    </section>
+    <section id="predict" class="card">
+      <h2>予算推定</h2>
+      <div class="form-row">
+        <label for="query_text">事業概要テキスト</label>
+        <input type="text" id="query_text" placeholder="例）教育分野のデジタル化を推進し…" />
+      </div>
+      <div class="actions">
+        <button class="btn primary" onclick="predictText()">テキストで予測</button>
+      </div>
+      <div id="pred" class="result"></div>
+    </section>
+
+    <section id="events" class="card">
+      <h2>イベント操作（任意）</h2>
+      <div class="actions">
+        <input type="text" id="event_ids_input" placeholder="イベントIDをカンマ区切りで（任意）例: 86,91,112" />
+        <button class="btn" onclick="startSession()">セッション開始</button>
+        <button class="btn" onclick="nextEvent()">次イベント取得</button>
+        <span class="muted">session_id: <code id="session_id"></code></span>
+      </div>
+      <div class="grid">
+        <div>
+          <h3>セッション</h3>
+          <pre id="session" class="code"></pre>
+        </div>
+        <div>
+          <h3>イベント</h3>
+          <pre id="event" class="code"></pre>
+        </div>
+      </div>
+      <div class="result" id="start_events_meta"></div>
+    </section>
+
+    
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <span class="muted">© Policy Game Demo</span>
+    </div>
+  </footer>
+</body>
+</html>

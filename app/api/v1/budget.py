@@ -2,9 +2,12 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 import numpy as np
+from pathlib import Path
 
 from app.api.v1.state import _SESSIONS  # MVP: セッションKVSを共用
 from app.services.predictor import predict_initial_budget
+from app.services.datastore import load_budget_data
+from app.services.embedding import embed_text_to_vec
 
 router = APIRouter()
 
@@ -55,13 +58,14 @@ def allocate(req: AllocateRequest):
 # ========== 2) 予算推定 (/v1/budget/predict) ==========
 
 class PredictRequest(BaseModel):
-    # MVP: 埋め込みを直接受ける（後でテキスト→埋め込みへ置換）
-    query_vec_1: list[float] = Field(..., min_length=1)
-    query_vec_2: list[float] | None = Field(default=None, min_length=1)
+    # テキストのみ受け付け（サーバ側で埋め込み）
+    query_text: str
 
 class PredictResponse(BaseModel):
     can_estimate: bool
     estimate_initial: float | None = None
+    estimate_final: float | None = None
+    ratio: float | None = None
     currency: str | None = None
     topk: list[dict] | None = None
     reason: str | None = None
@@ -69,10 +73,12 @@ class PredictResponse(BaseModel):
 @router.post("/budget/predict", response_model=PredictResponse)
 def budget_predict(req: PredictRequest):
     try:
-        result = predict_initial_budget(
-            np.asarray(req.query_vec_1, dtype="float32"),
-            np.asarray(req.query_vec_2, dtype="float32") if req.query_vec_2 else None
-        )
+        data = load_budget_data()
+        if not req.query_text or not req.query_text.strip():
+            raise HTTPException(status_code=422, detail="query_text is required")
+        q = embed_text_to_vec(req.query_text, dim=int(data.X1.shape[1]), normalize=True)
+
+        result = predict_initial_budget(q)
         if not result["can_estimate"]:
             raise HTTPException(status_code=422, detail=result.get("reason", "cannot estimate"))
         return result
@@ -80,3 +86,25 @@ def budget_predict(req: PredictRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"prediction failed: {e}")
+
+
+# ========== 3) モデル情報 (/v1/budget/model_info) ==========
+
+class ModelInfo(BaseModel):
+    x_dim: int
+    n_items: int
+    topk: int
+    tau: float
+    data_source: str
+
+@router.get("/budget/model_info", response_model=ModelInfo)
+def budget_model_info():
+    try:
+        data = load_budget_data()
+        x_dim = int(data.X1.shape[1])
+        n_items = int(data.X1.shape[0])
+        data_source = "adm_game.parquet" if Path("data/adm_game.parquet").exists() else "embeddings.npz"
+        from app.core.config import settings
+        return ModelInfo(x_dim=x_dim, n_items=n_items, topk=settings.TOPK, tau=settings.TAU, data_source=data_source)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"failed to load model info: {e}")
