@@ -8,6 +8,7 @@ from app.api.v1.state import _SESSIONS  # MVP: セッションKVSを共用
 from app.services.predictor import predict_initial_budget
 from app.services.datastore import load_budget_data
 from app.services.embedding import embed_text_to_vec
+from app.utils.json_safe import json_safe
 
 router = APIRouter()
 
@@ -79,6 +80,7 @@ def budget_predict(req: PredictRequest):
         q = embed_text_to_vec(req.query_text, dim=int(data.X1.shape[1]), normalize=True)
 
         result = predict_initial_budget(q)
+        result = json_safe(result)
         if not result["can_estimate"]:
             raise HTTPException(status_code=422, detail=result.get("reason", "cannot estimate"))
         return result

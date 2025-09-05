@@ -3,8 +3,29 @@ from fastapi import APIRouter, HTTPException, Query
 from app.api.v1.state import _SESSIONS  # MVP: stateが持つKVSを使い回す
 from app.services.events_catalog import get_event_meta, get_all_event_ids
 from pydantic import BaseModel, Field, ConfigDict
+import math
 
 router = APIRouter()
+
+def _safe_num(v):
+    try:
+        f = float(v)
+        if not math.isfinite(f):
+            return None
+        return f
+    except Exception:
+        return v
+
+def _clean_meta(d: dict) -> dict:
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, (int, float)):
+            out[k] = _safe_num(v)
+        elif isinstance(v, str) and v.lower() == 'nan':
+            out[k] = None
+        else:
+            out[k] = v
+    return out
 
 @router.get("/next")
 def next_event(session_id: str = Query(..., description="start()で得たUUID")):
@@ -26,6 +47,9 @@ def next_event(session_id: str = Query(..., description="start()で得たUUID"))
 
     event_id = schedule.pop(0)  # 先頭を取り出す（重複防止）
     remaining = len(schedule)
+    # 現在の月（1始まり）: 取り出し後の残件数から算出
+    events_per_year = session.get("events_per_year", 12)
+    month_in_year = int(events_per_year - remaining)
 
     # メタ情報の付与（selected_game.csv 由来）
     try:
@@ -33,9 +57,18 @@ def next_event(session_id: str = Query(..., description="start()で得たUUID"))
     except Exception:
         meta = {"予算事業ID": event_id}
 
+    # JSON安全化（NaN/Inf→None）
+    try:
+        from math import isfinite
+        from app.utils.json_safe import json_safe
+        meta = json_safe(meta)
+    except Exception:
+        pass
+
     return {
         "year": year,
         "予算事業ID": event_id,
+        "month_in_year": month_in_year,
         "remaining_in_year": remaining,
         "meta": meta,
     }
@@ -57,7 +90,7 @@ class EventMetaResponse(BaseModel):
 @router.get("/meta", response_model=EventMetaResponse)
 def event_meta(budget_id: str = Query(..., description="selected_game.csv の 予算事業ID")):
     try:
-        return get_event_meta(budget_id)
+        return _clean_meta(get_event_meta(budget_id))
     except KeyError:
         raise HTTPException(status_code=404, detail="budget_id not found")
 
@@ -71,7 +104,7 @@ def event_overview():
     if not ids:
         raise HTTPException(status_code=404, detail="no events available")
     try:
-        return get_event_meta(str(ids[0]))
+        return _clean_meta(get_event_meta(str(ids[0])))
     except KeyError:
         raise HTTPException(status_code=404, detail="default event not found")
 
@@ -83,3 +116,33 @@ def event_ids():
     if not ids:
         raise HTTPException(status_code=404, detail="no events available")
     return ids
+
+
+@router.get("/meta_by_name", response_model=EventMetaResponse)
+def event_meta_by_name(name: str = Query(..., description="事業名 完全一致/部分一致")):
+    """Lookup event metadata by name (exact or substring match). Returns the first hit.
+    This is a fallback path when 予算事業ID is unavailable in prediction results.
+    """
+    from app.services.events_catalog import load_events_df
+    df = load_events_df()
+    candidates = df
+    if "事業名" in df.columns:
+        # Try exact first
+        exact = df[df["事業名"] == name]
+        if len(exact) == 0:
+            # Fallback to contains
+            contains = df[df["事業名"].astype(str).str.contains(str(name), na=False)]
+            candidates = contains
+        else:
+            candidates = exact
+    if len(candidates) == 0:
+        raise HTTPException(status_code=404, detail="name not found")
+    row = candidates.iloc[0]
+    return _clean_meta({
+        "予算事業ID": str(row.get("予算事業ID", "")),
+        "事業名": row.get("事業名", None),
+        "事業の概要": row.get("事業の概要", None),
+        "現状・課題": row.get("現状・課題", None),
+        "当初予算": row.get("当初予算", None),
+        "歳出予算現額": row.get("歳出予算現額", None),
+    })

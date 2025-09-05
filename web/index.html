@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Policy Game | 予算推定デモ</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="app-light.css" />
   <script>
     const api = (path, init) => fetch(path, init).then(async r => {
       const text = await r.text();
@@ -34,41 +35,79 @@
     }
 
     async function predictText() {
-      const t = document.getElementById('query_text').value;
+      const hidden = document.getElementById('query_text');
+      const fromHidden = hidden ? (hidden.value || '') : '';
+      const fromInput = (document.getElementById('input_gaiyo')?.value || '');
+      const t = (fromHidden || fromInput || '').trim();
       const out = document.getElementById('pred');
       out.textContent = 'predicting (text)...';
+      if (!t) {
+        out.textContent = '入力が空です。事業の概要を入力してください。';
+        return;
+      }
       try {
         const res = await api('/v1/budget/predict', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query_text: t })
         });
-        // Render pretty output
+        // Render pretty output (推定当初予算のみ)
         let html = '';
-        html += '<div>✅ 推定結果</div>';
-        html += `<div>推定当初予算 : ${yen(res.estimate_initial)} 円</div>`;
-        if (res.estimate_final !== null && res.estimate_final !== undefined) {
-          html += `<div>推定現額     : ${yen(res.estimate_final)} 円</div>`;
-          if (res.ratio !== null && res.ratio !== undefined) {
-            html += `<div>推定増減率   : ${Number(res.ratio).toFixed(2)} 倍</div>`;
-          }
-        }
+        html += `
+<section class="summary-kpi-section">
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-icon">💰</div>
+      <div class="kpi-content">
+        <h3>推定当初予算</h3>
+        <div class="kpi-value">${yen(res.estimate_initial)} 円</div>
+      </div>
+    </div>
+  </div>
+</section>`;
+        // 実データ確認ボタンは右ペインの固定ボタンを使用（ここでは追加しない）
+        
         html += '<br/>';
-        html += '<div>Top-K 類似事業</div>';
+        html += '<div class="card-title" style="margin-top:8px">類似事業</div>';
         if (Array.isArray(res.topk) && res.topk.length) {
-          html += '<table border="1" cellspacing="0" cellpadding="4"><tr>' +
-                  '<th>rank</th><th>類似度</th><th>重み</th><th>事業名</th><th>当初予算</th><th>現額</th></tr>';
+          html += '<div class="projects-list">';
           for (const r of res.topk) {
-            html += `<tr><td>${r.rank}</td><td>${(r.similarity??0).toFixed(3)}</td>` +
-                    `<td>${(r.weight??0).toFixed(3)}</td>` +
-                    `<td>${r.name ?? ''}</td>` +
-                    `<td style="text-align:right">${yen(r.initial_budget)}</td>` +
-                    `<td style="text-align:right">${yen(r.final_budget)}</td></tr>`;
+            const sim = Number(r.similarity ?? 0);
+            const sim01 = Math.max(0, Math.min(1, (sim + 1) / 2));
+            const simPct = (sim01*100).toFixed(0);
+            const name = (r.name ?? '');
+            html += `
+              <div class=\"project-item${r.rank===1 ? ' top1' : ''}">
+                <div class="project-header">
+                  <span class="rank-badge">#${r.rank}</span>
+                  <span class="project-name">${name}</span>
+                </div>
+                <div class="simbar"><div class="simbar-fill" style="width:${simPct}%"></div></div>
+                <div class="project-rating">
+                  <span class="sim">sim ${(sim).toFixed(3)} (${simPct}%)</span>
+                  <span class="y0">当初 ${yen(r.initial_budget)}</span>
+                </div>
+              </div>`;
           }
-          html += '</table>';
+          html += '</div>';
         } else {
           html += '<div class="muted">類似事業はありません</div>';
         }
         out.innerHTML = html;
+        // Attach click handlers to similar project cards
+        try {
+          window.LAST_PRED = res;
+          const cards = out.querySelectorAll('.project-item');
+          cards.forEach((el, i) => {
+            const bid = (res.topk && res.topk[i] && res.topk[i].budget_id) ? String(res.topk[i].budget_id) : '';
+            el.dataset.bid = bid;
+            if (bid) {
+              el.style.cursor = 'pointer';
+              el.addEventListener('click', () => openProjectDetail(el.dataset.bid));
+            } else {
+              el.title = 'IDが無いため詳細を表示できません';
+            }
+          });
+        } catch {}
       } catch (e) {
         out.textContent = `error: ${e.status} \n` + JSON.stringify(e.data, null, 2);
       }
@@ -182,79 +221,277 @@
       try{
         const id = state.ids[state.idx];
         const m = await api(`/v1/events/meta?budget_id=${encodeURIComponent(id)}`);
+        const kadai = (m['現状・課題'] ?? m['genjo_kadai'] ?? '')
         let html = '';
         html += `<div class="headline">${m['事業名'] ?? m['jigyo_mei'] ?? ''}</div>`;
-        html += `<div><h3>課題（現状・課題）</h3><div class="code">${(m['現状・課題'] ?? m['genjo_kadai'] ?? '').replace(/\n/g,'<br>')}</div></div>`;
+        html += `<div><h3>課題（現状・課題）</h3><div class="code">${kadai.replace(/\n/g,'<br>')}</div></div>`;
         box.innerHTML = html;
+        box.dataset.kadai = kadai;
+        box.dataset.gaiyo = '';
       }catch(e){
         box.innerHTML = `error: ${e.status}<br><pre class="code">${JSON.stringify(e.data, null, 2)}</pre>`;
       }
     }
     async function loadOverview(){
-      const state = await initSchedule();
-      await renderOverview(state);
+      // no-op on load; use server-driven flow via startGame/nextEventServer
+      const box = document.getElementById('overview_content');
+      box.innerHTML = '<span class="muted">ヘッダーの「ゲーム開始」→「今月の事業を取得」を使ってください</span>';
     }
-    async function nextOverview(){
-      const state = await initSchedule();
-      state.idx += 1;
-      if(state.idx > state.ids.length) state.idx = state.ids.length;
-      saveSchedule(state);
-      await renderOverview(state);
+    async function nextOverview(){ /* deprecated */ }
+
+    async function startGame(){
+      try {
+        const s = await api('/v1/state/start', { method: 'POST' });
+        window.SESSION_ID = s.session_id;
+        document.getElementById('kpi_year').textContent = `Year ${s.year}`;
+        document.getElementById('kpi_remaining').textContent = `${yen(s.year_budget_remaining)} 円`;
+        document.getElementById('period_label').textContent = `${s.year}年 1月`;
+        document.getElementById('overview_content').innerHTML = '<span class="muted">今月の事業を取得を押してください</span>';
+        // reset gating for actual view
+        window.CURRENT_EVENT_ID = null;
+        window.ALLOCATED_EVENT_ID = null;
+        const actualBox = document.getElementById('actual_month_box');
+        if (actualBox) actualBox.textContent = '';
+      } catch (e) {
+        alert('ゲーム開始に失敗しました');
+      }
+    }
+
+    async function refreshMe(){
+      if (!window.SESSION_ID) return;
+      try {
+        const m = await api(`/v1/state/me?session_id=${encodeURIComponent(window.SESSION_ID)}`);
+        document.getElementById('kpi_year').textContent = `Year ${m.year}`;
+        document.getElementById('kpi_remaining').textContent = `${yen(m.year_budget_remaining)} 円`;
+      } catch {}
+    }
+
+    async function nextEventServer(){
+      if (!window.SESSION_ID) { alert('先にゲーム開始を押してください'); return; }
+      const box = document.getElementById('overview_content');
+      box.innerHTML = 'loading...';
+      try {
+        const ev = await api(`/v1/events/next?session_id=${encodeURIComponent(window.SESSION_ID)}`);
+        const meta = ev.meta || {};
+        window.CURRENT_EVENT_ID = ev['予算事業ID'];
+        window.ALLOCATED_EVENT_ID = null;
+        const actualBox = document.getElementById('actual_month_box');
+        if (actualBox) actualBox.textContent = '';
+        document.getElementById('period_label').textContent = `${ev.year}年 ${ev.month_in_year}月`;
+        let html = '';
+        html += `<div class="headline">${meta['事業名'] ?? ''}</div>`;
+        const kadai = (meta['現状・課題'] ?? '').replace(/\n/g,'<br>');
+        html += `<div><h3>課題（現状・課題）</h3><div class="code">${kadai}</div></div>`;
+        box.innerHTML = html;
+      } catch (e) {
+        if (e && e.status === 409) {
+          // 年度終了。次年度へ進む導線を表示
+          box.innerHTML = '<div class="muted">この年度のイベントは終了しました。</div>' +
+            '<div class="actions" style="margin-top:8px">' +
+            '<button class="btn btn-secondary" onclick="goNextYear()">次年度へ進む</button>' +
+            '</div>';
+        } else {
+          box.innerHTML = `error: ${e.status || ''}`;
+        }
+      }
+    }
+
+    async function goNextYear(){
+      if (!window.SESSION_ID) { alert('先にゲーム開始を押してください'); return; }
+      try {
+        const res = await api('/v1/state/next_year', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: window.SESSION_ID })
+        });
+        // KPI更新
+        document.getElementById('kpi_year').textContent = `Year ${res.moved_to_year}`;
+        document.getElementById('kpi_remaining').textContent = `${yen(res.year_budget_remaining)} 円`;
+        // 表示を初期化して新年度1月のイベント取得
+        const box = document.getElementById('overview_content');
+        box.innerHTML = '<span class="muted">新年度のイベントを取得しています...</span>';
+        // 1月のイベントを取得
+        await nextEventServer();
+      } catch (e) {
+        alert('次年度への遷移に失敗しました');
+      }
+    }
+
+    async function allocateBudget(){
+      if (!window.SESSION_ID || !window.CURRENT_EVENT_ID) { alert('イベントを取得してください'); return; }
+      const amt = parseFloat(document.getElementById('alloc_input')?.value || '0');
+      if (!(amt > 0)) { alert('割当額を入力してください'); return; }
+      try {
+        const res = await api('/v1/allocate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: window.SESSION_ID, event_id: String(window.CURRENT_EVENT_ID), allocated_budget: amt })
+        });
+        document.getElementById('kpi_remaining').textContent = `${yen(res.year_budget_remaining)} 円`;
+        window.ALLOCATED_EVENT_ID = window.CURRENT_EVENT_ID;
+        alert('割当を保存しました');
+      } catch (e) {
+        alert('割当に失敗しました: ' + (e.data?.detail || ''));
+      }
+    }
+
+    async function openProjectDetail(budgetId){
+      const modal = document.getElementById('detail_modal');
+      const body = document.getElementById('detail_body');
+      const title = document.getElementById('detail_title');
+      body.innerHTML = 'loading...';
+      let m = null;
+      try {
+        if (budgetId) {
+          m = await api(`/v1/events/meta?budget_id=${encodeURIComponent(budgetId)}`);
+        } else {
+          throw new Error('no id');
+        }
+      } catch (e) {}
+      try {
+        if (!m) throw new Error('not found');
+        title.textContent = m['事業名'] ?? m['jigyo_mei'] ?? '詳細';
+        const gaiyo = (m['事業の概要'] ?? m['jigyo_no_gaiyo'] ?? '');
+        const mokuteki = (m['現状・課題'] ?? m['genjo_kadai'] ?? '');
+        const url = (m['事業概要URL'] ?? '');
+        let html = '';
+        html += `<div class="detail-row"><strong>目的/課題</strong><p>${(mokuteki||'').replace(/\n/g,'<br>')}</p></div>`;
+        html += `<div class="detail-row"><strong>事業の概要</strong><p>${(gaiyo||'').replace(/\n/g,'<br>')}</p></div>`;
+        if (url) html += `<div class="detail-row"><strong>参考URL</strong><p><a href="${url}" target="_blank" rel="noopener">${url}</a></p></div>`;
+        body.innerHTML = html;
+        modal.classList.add('show');
+      } catch (e) {
+        body.innerHTML = '取得に失敗しました';
+        modal.classList.add('show');
+      }
+    }
+
+    function closeDetail(){
+      const modal = document.getElementById('detail_modal');
+      if (modal) modal.classList.remove('show');
+    }
+
+    function predictFromInputs(){
+      const g = (document.getElementById('input_gaiyo')?.value || '').trim();
+      const text = g;
+      const q = document.getElementById('query_text');
+      if (q) q.value = text;
+      predictText();
+    }
+
+    async function showActualThisMonth(){
+      const box = document.getElementById('actual_month_box');
+      if (!box) return;
+      if (!window.CURRENT_EVENT_ID || window.ALLOCATED_EVENT_ID !== window.CURRENT_EVENT_ID) {
+        alert('今は見ることができません（この月の事業に予算を割り当ててください）');
+        return;
+      }
+      box.textContent = 'loading actual...';
+      try{
+        const state = await initSchedule();
+        const curId = state.ids[Math.min(state.idx, state.ids.length-1)];
+        const meta = await api(`/v1/events/meta?budget_id=${encodeURIComponent(curId)}`);
+        const actualInit = meta['当初予算'] ?? meta['tosho_yosan'];
+        const actualName = meta['事業名'] ?? meta['jigyo_mei'] ?? '';
+        box.innerHTML = `
+<section class="summary-kpi-section">
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-icon">📌</div>
+      <div class="kpi-content">
+        <h3>今月の当初予算</h3>
+        <div class="kpi-value">${yen(actualInit)} 円</div>
+      </div>
+    </div>
+  </div>
+</section>
+<div class="muted">事業名: ${actualName}</div>`;
+      }catch(e){
+        box.textContent = '取得に失敗しました';
+      }
+    }
+
+    async function resetOverview(){
+      try { localStorage.removeItem(S_KEY); } catch {}
+      await loadOverview();
+      // Re-enable next button just in case
+      const btn = document.getElementById('btn_next_overview');
+      if (btn) btn.disabled = false;
     }
   </script>
 </head>
 <body onload="loadOverview()">
-  <header class="site-header">
-    <div class="container">
-      <div class="brand">Policy Game</div>
-      <nav class="nav">
-        <a href="#predict">予算推定</a>
-        <a href="#events">イベント</a>
-      </nav>
+  <header class="header">
+    <div class="header-content">
+      <div class="app-title">Policy Game</div>
+      <div class="header-actions">
+        <button class="btn btn-outline" onclick="startGame()">ゲーム開始</button>
+        <button class="btn btn-outline" onclick="nextEventServer()">今月の事業を取得</button>
+      </div>
     </div>
   </header>
 
-  <main class="container">
-    <section id="overview" class="card">
-      <h2>目的と課題</h2>
-      <div class="actions">
-        <span class="muted" id="period_label"></span>
-        <button class="btn" id="btn_next_overview" onclick="nextOverview()">更新</button>
-      </div>
-      <div id="overview_content" class="result"></div>
-    </section>
-    <section id="predict" class="card">
-      <h2>予算推定</h2>
-      <div class="form-row">
-        <label for="query_text">事業概要テキスト</label>
-        <input type="text" id="query_text" placeholder="例）教育分野のデジタル化を推進し…" />
-      </div>
-      <div class="actions">
-        <button class="btn primary" onclick="predictText()">テキストで予測</button>
-      </div>
-      <div id="pred" class="result"></div>
-    </section>
+  <main class="main-content">
+    <div class="two-column-layout">
+      <section id="leftpane" class="card">
+        <div class="card-title">今月の事業</div>
+        <div class="actions">
+          <span class="muted" id="period_label"></span>
+        </div>
+        <div id="overview_content" class="result"></div>
+        <div class="card-title" style="margin-top:14px">入力</div>
+        <div class="project-form">
+          <div class="form-group">
+            <label for="input_gaiyo">事業の概要</label>
+            <textarea id="input_gaiyo" rows="6" placeholder="事業の概要を入力"></textarea>
+          </div>
+          <div class="form-group">
+            <label for="alloc_input">この事業への割当額（円）</label>
+            <input type="number" id="alloc_input" placeholder="例: 5000000000" />
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" onclick="predictFromInputs()">この内容で予測</button>
+            <button class="btn btn-secondary" onclick="allocateBudget()">この事業に割当</button>
+          </div>
+        </div>
+        <input type="hidden" id="query_text" />
+      </section>
+      <section id="rightpane" class="card">
+        <div class="card-title">予算推定・類似事業</div>
+        <section class="summary-kpi-section">
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-icon">📅</div>
+              <div class="kpi-content">
+                <h3>年度</h3>
+                <div class="kpi-value" id="kpi_year">-</div>
+              </div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-icon">💵</div>
+              <div class="kpi-content">
+                <h3>年度残額</h3>
+                <div class="kpi-value" id="kpi_remaining">- 円</div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <div class="actions" style="margin:8px 0">
+          <button class="btn small" id="btn_show_actual" onclick="showActualThisMonth()">今月の事業の当初予算を確認</button>
+          <span id="actual_month_box" class="muted" style="margin-left:8px"></span>
+        </div>
+        <div id="pred" class="projects-list"></div>
+      </section>
+    </div>
 
-    <section id="events" class="card">
-      <h2>イベント操作（任意）</h2>
-      <div class="actions">
-        <input type="text" id="event_ids_input" placeholder="イベントIDをカンマ区切りで（任意）例: 86,91,112" />
-        <button class="btn" onclick="startSession()">セッション開始</button>
-        <button class="btn" onclick="nextEvent()">次イベント取得</button>
-        <span class="muted">session_id: <code id="session_id"></code></span>
-      </div>
-      <div class="grid">
-        <div>
-          <h3>セッション</h3>
-          <pre id="session" class="code"></pre>
+    <!-- 詳細モーダル -->
+    <div id="detail_modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="detail_title">詳細</h3>
+          <button class="modal-close" onclick="closeDetail()">×</button>
         </div>
-        <div>
-          <h3>イベント</h3>
-          <pre id="event" class="code"></pre>
-        </div>
+        <div class="modal-body" id="detail_body"></div>
       </div>
-      <div class="result" id="start_events_meta"></div>
-    </section>
+    </div>
 
     
   </main>

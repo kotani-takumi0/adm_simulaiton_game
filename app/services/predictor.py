@@ -3,6 +3,7 @@ import pandas as pd
 from typing import Any
 from app.core.config import settings
 from app.services.datastore import load_budget_data, BudgetData
+import math
 
 def _normalize_rows(M: np.ndarray) -> np.ndarray:
     M = np.asarray(M, dtype="float32")
@@ -71,6 +72,7 @@ def predict_initial_budget(query_vec: np.ndarray) -> dict[str, Any]:
     col_name   = "事業名" if "事業名" in df.columns else None
     col_init   = "当初予算" if "当初予算" in df.columns else None
     col_final  = "歳出予算現額" if "歳出予算現額" in df.columns else None
+    col_id     = "予算事業ID" if "予算事業ID" in df.columns else None
 
     rows = []
     for rank, j in enumerate(idx[mask], 1):
@@ -84,15 +86,17 @@ def predict_initial_budget(query_vec: np.ndarray) -> dict[str, Any]:
             "similarity": float(sims_f[rank-1]),
             "weight": float(w_f[rank-1]),
             "name": name,
-            "initial_budget": y0,
-            "final_budget": yfin,
+            "initial_budget": (None if (not math.isfinite(y0)) else y0),
+            "final_budget": (None if (not math.isfinite(yfin)) else yfin),
+            "budget_id": str(row[col_id]) if col_id and pd.notna(row[col_id]) else None,
         })
 
+    ratio = (est_final / est_init) if (est_final is not None and est_init > 0) else None
     return {
         "can_estimate": True,
         "estimate_initial": est_init,
-        "estimate_final": est_final,
-        "ratio": (est_final / est_init) if (est_final is not None and est_init > 0) else None,
+        "estimate_final": (None if (est_final is None or not math.isfinite(est_final)) else est_final),
+        "ratio": (None if (ratio is None or not math.isfinite(ratio)) else ratio),
         "currency": "JPY",
         "topk": rows
     }

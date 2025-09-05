@@ -122,3 +122,30 @@ def next_year(session_id: str = Body(..., embed=True)):
         year_budget_total=session["year_budget_total"],
         year_budget_remaining=session["year_budget_remaining"],
     )
+
+
+class MeResponse(BaseModel):
+    session_id: str
+    year: int
+    years_total: int
+    year_budget_total: float
+    year_budget_remaining: float
+    events_per_year: int
+    remaining_in_year: int
+
+@router.get("/me", response_model=MeResponse)
+def me(session_id: str):
+    session = _SESSIONS.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+    year = session["year"]
+    remaining = len(session["schedule"].get(year, []))
+    return MeResponse(
+        session_id=session_id,
+        year=year,
+        years_total=session["years_total"],
+        year_budget_total=session["year_budget_total"],
+        year_budget_remaining=session["year_budget_remaining"],
+        events_per_year=session["events_per_year"],
+        remaining_in_year=remaining,
+    )
