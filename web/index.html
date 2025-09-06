@@ -31,7 +31,12 @@
 
     function yen(n) {
       if (n === null || n === undefined || isNaN(n)) return '';
-      try { return Number(n).toLocaleString('ja-JP'); } catch { return String(n); }
+      try {
+        const v = Math.round(Number(n));
+        return v.toLocaleString('ja-JP');
+      } catch {
+        return String(n);
+      }
     }
 
     async function predictText() {
@@ -216,7 +221,7 @@
         return;
       }
       const {year, month} = idxToPeriod(state.idx);
-      label.textContent = `${year}年 ${month}月`;
+      label.textContent = `${year}年目 ${month}月`;
       box.innerHTML = 'loading...';
       try{
         const id = state.ids[state.idx];
@@ -245,7 +250,7 @@
         window.SESSION_ID = s.session_id;
         document.getElementById('kpi_year').textContent = `Year ${s.year}`;
         document.getElementById('kpi_remaining').textContent = `${yen(s.year_budget_remaining)} 円`;
-        document.getElementById('period_label').textContent = `${s.year}年 1月`;
+        document.getElementById('period_label').textContent = `${s.year}年目 1月`;
         document.getElementById('overview_content').innerHTML = '<span class="muted">今月の事業を取得を押してください</span>';
         // reset gating for actual view
         window.CURRENT_EVENT_ID = null;
@@ -277,7 +282,7 @@
         window.ALLOCATED_EVENT_ID = null;
         const actualBox = document.getElementById('actual_month_box');
         if (actualBox) actualBox.textContent = '';
-        document.getElementById('period_label').textContent = `${ev.year}年 ${ev.month_in_year}月`;
+        document.getElementById('period_label').textContent = `${ev.year}年目 ${ev.month_in_year}月`;
         let html = '';
         html += `<div class="headline">${meta['事業名'] ?? ''}</div>`;
         const kadai = (meta['現状・課題'] ?? '').replace(/\n/g,'<br>');
@@ -386,8 +391,7 @@
       }
       box.textContent = 'loading actual...';
       try{
-        const state = await initSchedule();
-        const curId = state.ids[Math.min(state.idx, state.ids.length-1)];
+        const curId = String(window.CURRENT_EVENT_ID);
         const meta = await api(`/v1/events/meta?budget_id=${encodeURIComponent(curId)}`);
         const actualInit = meta['当初予算'] ?? meta['tosho_yosan'];
         const actualName = meta['事業名'] ?? meta['jigyo_mei'] ?? '';

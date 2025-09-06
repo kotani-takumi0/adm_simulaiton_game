@@ -1,13 +1,13 @@
-# Frontend (Next.js)
+# フロントエンド（Next.js・任意）
 
-This is an optional React/Next.js UI that enhances the visualization of similar projects.
+本リポジトリの FastAPI バックエンドと連携する、任意利用の React/Next.js UI です。簡易UI（`/ui/`）だけでも動作しますが、よりリッチな表示や開発体験が必要な場合にご利用ください。
 
-## Prerequisites
+## 前提条件
 - Node.js 18+
-- Backend running at http://127.0.0.1:8000 (FastAPI in this repo)
-- Ensure backend CORS allows http://localhost:3000 (set `CORS_ORIGINS` in `.env` if needed)
+- バックエンドが `http://127.0.0.1:8000` で起動済み
+- バックエンドの CORS に `http://localhost:3000` を含める（`.env` の `CORS_ORIGINS`）
 
-## Setup
+## セットアップ
 
 ```
 cd frontend
@@ -15,16 +15,18 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000 in your browser.
+ブラウザで `http://localhost:3000` を開きます。
 
-## Features
-- Text prediction (query_text) and big, clean estimate display
-- Similar projects as responsive cards with similarity bars
-- "Show this month's actual" button that reads a 60-month randomized schedule (same logic as static UI) and fetches initial budget for the current month from the backend
+## 主な機能
+- テキストから当初予算を推定し、見やすく表示
+- 類似事業カードを相対スコアバー付きで表示
+- バックエンド API と連携して事業メタ・予測結果を取得
 
-## Notes
-- The schedule is kept in `localStorage` under key `pg_overview_schedule_v1`
-- API endpoints used:
-  - `POST /v1/budget/predict`
-  - `GET /v1/events/ids`
-  - `GET /v1/events/meta?budget_id=...`
+## 参照API
+- `POST /v1/budget/predict`
+- `GET /v1/events/ids`
+- `GET /v1/events/meta?budget_id=...`
+
+## 備考
+- プロダクション用途では環境変数や API ベースURLの切替を `.env.local` などで管理してください。
+- バックエンドの簡易UI（`/ui/`）は依然として利用可能です。まずはバックエンドのみで確認し、必要に応じて本UIを起動してください。

@@ -1,5 +1,6 @@
 # app/main.py
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.state import router as state_router
 from app.api.v1.events import router as events_router
@@ -12,6 +13,16 @@ app = FastAPI(title="Policy Game API", version="0.1.0")
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+# Redirect root to UI
+@app.get("/")
+def root_redirect():
+    return RedirectResponse(url="/ui/")
+
+# Avoid noisy 404 for browsers requesting a favicon
+@app.get("/favicon.ico")
+def favicon():
+    return Response(status_code=204)
 
 # /v1/state/... のルート群を登録
 app.include_router(state_router, prefix="/v1/state", tags=["state"])
