@@ -257,6 +257,10 @@
         window.ALLOCATED_EVENT_ID = null;
         const actualBox = document.getElementById('actual_month_box');
         if (actualBox) actualBox.textContent = '';
+        resetLineSeries();
+        try { setNextButtonEnabled(false); } catch {}
+        try { await nextEventServer(); } catch {}
+        try { await loadMetrics(); } catch {}
       } catch (e) {
         alert('ゲーム開始に失敗しました');
       }
@@ -279,6 +283,8 @@
         const ev = await api(`/v1/events/next?session_id=${encodeURIComponent(window.SESSION_ID)}`);
         const meta = ev.meta || {};
         window.CURRENT_EVENT_ID = ev['予算事業ID'];
+        window.CURRENT_MONTH = ev.month_in_year;
+        window.CURRENT_NAME = meta['事業名'] || '';
         window.ALLOCATED_EVENT_ID = null;
         const actualBox = document.getElementById('actual_month_box');
         if (actualBox) actualBox.textContent = '';
@@ -288,6 +294,8 @@
         const kadai = (meta['現状・課題'] ?? '').replace(/\n/g,'<br>');
         html += `<div><h3>課題（現状・課題）</h3><div class="code">${kadai}</div></div>`;
         box.innerHTML = html;
+        try { setNextButtonEnabled(false); } catch {}
+        try { await loadMetrics(); } catch {}
       } catch (e) {
         if (e && e.status === 409) {
           // 年度終了。次年度へ進む導線を表示
@@ -301,9 +309,70 @@
       }
     }
 
+    // 入力値を“ユーザ想定予算”として折れ線に追加（実予算は表示しない）
+    function setNextButtonEnabled(enabled){
+      const b = document.getElementById('btn_next_month');
+      const hint = document.getElementById('next_hint');
+      if (b){
+        b.disabled = !enabled;
+        b.setAttribute('aria-disabled', String(!enabled));
+        if (!enabled){
+          b.title = 'この月の事業に割当を行うと次へ進めます';
+        } else {
+          b.title = '次の月へ進めます';
+        }
+      }
+      if (hint){
+        if (enabled){
+          hint.textContent = '次の月へ進めます';
+          hint.classList.add('ok');
+        } else {
+          hint.textContent = 'この月の事業に割当を行うと次へ進めます';
+          hint.classList.remove('ok');
+        }
+      }
+    }
+
+    function getCurrentInputAmount(){
+      const raw = document.getElementById('alloc_input')?.value || '';
+      const v = parseFloat(raw);
+      return (v > 0) ? v : null;
+    }
+
+    async function nextMonth(){
+      if (!window.SESSION_ID) { alert('先にゲーム開始を押してください'); return; }
+      if (!window.CURRENT_EVENT_ID) { alert('今月の事業を取得してください'); return; }
+      if (window.ALLOCATED_EVENT_ID !== window.CURRENT_EVENT_ID) {
+        alert('この月の事業に割当を行ってから次の月へ進んでください');
+        return;
+      }
+      // 現在月の想定値（入力があれば）と実（割当後なので公開OK）を最終反映してから次へ
+      try {
+        const userAmt = getCurrentInputAmount();
+        const sid = window.SESSION_ID;
+        const curId = String(window.CURRENT_EVENT_ID || '');
+        const curMonth = window.CURRENT_MONTH;
+        const name = window.CURRENT_NAME || '';
+        if (sid && curId && curMonth){
+          const data = await api(`/v1/metrics/months?session_id=${encodeURIComponent(sid)}`);
+          const months = Array.isArray(data.months) ? data.months : [];
+          const rec = months.find(m => String(m.event_id||'') === curId);
+          const actual = (rec && rec.actual_initial!=null) ? rec.actual_initial : null;
+          if (userAmt!=null || actual!=null) appendLinePoint(curMonth, userAmt, actual, name);
+        }
+      } catch {}
+      await nextEventServer();
+      // 入力をクリアし、次月は未割当なのでボタンを無効化
+      try { document.getElementById('alloc_input').value = ''; } catch {}
+      try { document.getElementById('input_gaiyo').value = ''; } catch {}
+      setNextButtonEnabled(false);
+    }
+
     async function goNextYear(){
       if (!window.SESSION_ID) { alert('先にゲーム開始を押してください'); return; }
       try {
+        // 年度終了前に、当該月の入力値を反映（点追加）
+        try { addUserPointForCurrentMonth(); } catch {}
         const res = await api('/v1/state/next_year', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: window.SESSION_ID })
@@ -316,6 +385,8 @@
         box.innerHTML = '<span class="muted">新年度のイベントを取得しています...</span>';
         // 1月のイベントを取得
         await nextEventServer();
+        resetLineSeries();
+        try { await loadMetrics(); } catch {}
       } catch (e) {
         alert('次年度への遷移に失敗しました');
       }
@@ -333,6 +404,18 @@
         document.getElementById('kpi_remaining').textContent = `${yen(res.year_budget_remaining)} 円`;
         window.ALLOCATED_EVENT_ID = window.CURRENT_EVENT_ID;
         alert('割当を保存しました');
+        try { setNextButtonEnabled(true); } catch {}
+        // 直近のイベントに対応する月・実データを取得して折れ線に追加
+        try {
+          const data = await api(`/v1/metrics/months?session_id=${encodeURIComponent(window.SESSION_ID)}`);
+          const months = Array.isArray(data.months) ? data.months : [];
+          const rec = months.find(m => String(m.event_id||'') === String(window.CURRENT_EVENT_ID||''));
+          if (rec) {
+            // 実予算は割当が入った月のみ表示
+            appendLinePoint(rec.month, amt, (rec.actual_initial!=null? rec.actual_initial : null), rec.name || '');
+          }
+        } catch {}
+        try { await loadMetrics(); } catch {}
       } catch (e) {
         alert('割当に失敗しました: ' + (e.data?.detail || ''));
       }
@@ -382,6 +465,49 @@
       predictText();
     }
 
+    // ---- Examples Assist ----
+    const EXAMPLES = [
+      { title: '教育ICT化', text: '小中学校での1人1台端末活用が進まず学習格差が生じている。教員研修、校内Wi‑Fi整備、端末更新を一体で実施し、デジタル教材の活用率を高める。到達度テストで学力指標の向上を図る。' },
+      { title: '防災・河川治水', text: '集中豪雨により浸水被害が多発。中小河川の堤防強化と排水機場の更新、リアルタイム水位監視を導入する。避難判断時間の短縮と浸水面積の縮小を目指す。' },
+      { title: '子育て支援・保育士確保', text: '保育士不足で待機児童が発生。処遇改善加算の拡充と就職準備金の支給、潜在保育士の復職支援を行う。定員充足率を改善し待機児童ゼロを目指す。' },
+      { title: '再生可能エネルギー', text: '化石燃料依存が高く電力料金が上昇。公共施設屋根への太陽光発電と蓄電池を導入し、災害時のレジリエンスを強化する。年間CO2排出量の削減を図る。' },
+      { title: '行政デジタル化', text: '窓口手続が紙中心で住民負担が大きい。申請のオンライン化とマイナンバー連携、RPA導入により処理時間を短縮する。来庁件数と処理コストを削減。' },
+      { title: '医療DX・遠隔診療', text: '過疎地での受診機会が不足。遠隔診療機器と地域連携ネットワークを整備し、慢性疾患の継続治療を支援する。救急搬送件数と重症化率の低減を図る。' },
+      { title: '地域公共交通', text: '赤字路線の廃止で移動手段が限られる。デマンド型交通とMaaSアプリを導入し、高齢者の通院・買物アクセスを確保する。利用者数と運行効率を改善。' },
+      { title: 'インフラ老朽化対策', text: '橋梁・トンネルの老朽化が進行。重点路線を対象に点検・補修とモニタリングセンサーを実装する。通行止め発生件数の削減を目指す。' },
+      { title: 'サイバーセキュリティ', text: '行政ネットワークへの攻撃が増加。EDR導入、人材育成、演習の定期実施で検知・対応力を向上させる。インシデント対応時間を短縮。' },
+      { title: '農業スマート化', text: '担い手不足と生産性低下が課題。ドローン散布と環境センサー、営農データ基盤を導入し省力化と収量安定を図る。作業時間の削減と歩留まり向上を目標。' },
+      { title: '観光振興・インバウンド', text: 'コロナ後の需要回復を取り込みたい。多言語案内と決済環境、広域周遊パスを整備する。滞在日数と消費単価の増加を目指す。' },
+      { title: '高齢者見守り', text: '独居高齢者の見守りが不十分。IoTセンサーと地域見守り拠点を整備し、異常検知時の連絡体制を構築する。転倒・熱中症の重症化を防止。' },
+      { title: '都市緑地・暑熱対策', text: 'ヒートアイランドが深刻。街路樹植栽とクールペーブメント、ミスト装置を重点配置する。体感温度の低減と熱中症救急件数の抑制を図る。' },
+      { title: '女性支援・DV防止', text: '相談件数が増加。ワンストップ支援窓口の増設と一時保護施設の拡充、加害者更生プログラムを実施する。再被害防止と自立支援を強化。' },
+      { title: 'EV充電インフラ', text: '充電スポット不足で普及が伸びない。幹線・観光地・集合住宅に急速/普通充電器を重点配置し、運用データを可視化する。稼働率と台数普及を支援。' },
+      { title: 'オープンデータ', text: 'データが散在し活用が進まない。標準APIとカタログ整備、メタデータ統一で再利用性を高める。民間利活用事例の創出を促進。' },
+      { title: 'スポーツ施設改修', text: '老朽化とバリアフリー未対応。床面更新、空調改善、ユニバーサル化で利用者満足を向上する。稼働率と大会誘致の増加を目指す。' },
+      { title: '文化財保存', text: '風化と災害リスクが高まる。デジタルアーカイブ化と耐震補強、展示環境の改善を行う。来館者体験の向上と継承を図る。' },
+    ];
+
+    function renderExamples(){
+      const box = document.getElementById('examples_box');
+      if (!box) return;
+      let html = '<div class="examples-title">例から選ぶ（クリックで概要に挿入）</div><div class="examples-grid">';
+      EXAMPLES.forEach((ex, i)=>{
+        html += `\n<div class=\"example-card\" onclick=\"insertExample(${i})\">\n  <div class=\"example-title\">${ex.title}</div>\n  <div class=\"example-text\">${ex.text}</div>\n  <div class=\"example-actions\">\n    <button class=\"chip-btn\" type=\"button\">挿入</button>\n    <button class=\"chip-btn\" type=\"button\" onclick=\"event.stopPropagation(); insertAndPredict(${i})\">挿入して予測</button>\n  </div>\n</div>`;
+      });
+      html += '</div>';
+      box.innerHTML = html;
+    }
+
+    function insertExample(i){
+      const ex = EXAMPLES[i]; if (!ex) return;
+      const ta = document.getElementById('input_gaiyo');
+      if (ta) { ta.value = ex.text; }
+    }
+    function insertAndPredict(i){
+      insertExample(i);
+      predictFromInputs();
+    }
+
     async function showActualThisMonth(){
       const box = document.getElementById('actual_month_box');
       if (!box) return;
@@ -420,20 +546,244 @@
       const btn = document.getElementById('btn_next_overview');
       if (btn) btn.disabled = false;
     }
+
+    async function loadMetrics(){
+      const box = document.getElementById('metrics_box');
+      const lineBox = document.getElementById('metrics_line_box');
+      if (!box) return;
+      if (!window.SESSION_ID) { box.innerHTML = '<span class="muted">先にゲームを開始してください</span>'; return; }
+      box.innerHTML = 'loading metrics...';
+      try{
+        const data = await api(`/v1/metrics/months?session_id=${encodeURIComponent(window.SESSION_ID)}`);
+        const months = Array.isArray(data.months) ? data.months : [];
+        // スケール用に最大値を算出（actual/allocated/aiの最大）
+        let maxVal = 0;
+        for (const m of months){
+          for (const v of [m.actual_initial, m.allocated, m.ai_reference]){
+            const f = Number(v);
+            if (!isNaN(f) && f > maxVal) maxVal = f;
+          }
+        }
+        if (!(maxVal > 0)) maxVal = 1;
+        const pct = (v)=>`${Math.max(0, Math.min(100, (Number(v||0)/maxVal)*100))}%`;
+
+        let html = '';
+        html += '<div class="metrics-legend">'
+          + '<span><span class="box" style="background:#64748b"></span>実データ（当初）</span>'
+          + '<span><span class="box" style="background:#60a5fa"></span>割当</span>'
+          + '<span><span class="box" style="background:rgba(34,197,94,.25); border:1px solid rgba(34,197,94,.35)"></span>許容帯 (±20%)</span>'
+          + '<span><span class="box" style="background:#f59e0b"></span>AI参考値</span>'
+          + '</div>';
+        for (const m of months){
+          const low = m.tolerance_low, high = m.tolerance_high;
+          const left = Math.min(low ?? 0, high ?? 0);
+          const right = Math.max(low ?? 0, high ?? 0);
+          const bandLeft = pct(left);
+          const bandWidth = `calc(${pct(right)} - ${bandLeft})`;
+          const aiLeft = pct(m.ai_reference);
+          const actualW = pct(m.actual_initial);
+          const allocW = pct(m.allocated);
+          html += '<div class="metrics-row">'
+            + `<div class="metrics-label">${m.month}</div>`
+            + '<div class="metrics-track">'
+              + `<div class="metrics-band" style="left:${bandLeft}; width:${bandWidth}"></div>`
+              + (m.allocated!=null? `<div class=\"metrics-bar actual\" style=\"width:${actualW}\"></div>` : '')
+              + (m.allocated!=null? `<div class="metrics-bar alloc" style="width:${allocW}"></div>` : '')
+              + (m.ai_reference!=null? `<div class="metrics-marker ai" style="left:${aiLeft}"></div>` : '')
+            + '</div>'
+            + `<div class=\"metrics-values\">${m.name? m.name : ''} ${(m.allocated!=null && m.actual_initial!=null)? '実:'+yen(m.actual_initial):''} ${m.allocated!=null? ' 割当:'+yen(m.allocated):''} ${m.ai_reference!=null? ' AI:'+yen(m.ai_reference):''}</div>`
+            + '</div>';
+        }
+        box.innerHTML = html;
+        if (lineBox) { lineBox.innerHTML = renderLineChartFromSeries(); }
+      }catch(e){
+        box.innerHTML = `error: ${e.status || ''}`;
+      }
+    }
+
+    // 追加式 折れ線グラフ
+    function resetLineSeries(){
+      window.LINE_SERIES = { user: Array(12).fill(null), actual: Array(12).fill(null), names: {} };
+      const box = document.getElementById('metrics_line_box');
+      if (box) box.innerHTML = renderLineChartFromSeries();
+    }
+
+    function appendLinePoint(month, allocated, actual, name){
+      if (!window.LINE_SERIES) resetLineSeries();
+      const i = Math.max(1, Math.min(12, parseInt(month||0))) - 1;
+      if (isNaN(i) || i<0 || i>11) return;
+      if (allocated!=null && !isNaN(Number(allocated))) window.LINE_SERIES.user[i] = Number(allocated);
+      if (actual!=null && !isNaN(Number(actual))) window.LINE_SERIES.actual[i] = Number(actual);
+      if (name) window.LINE_SERIES.names[String(i+1)] = String(name);
+      const box = document.getElementById('metrics_line_box');
+      if (box) box.innerHTML = renderLineChartFromSeries();
+    }
+
+    function renderLineChartFromSeries(){
+      const S = window.LINE_SERIES || { user: [], actual: [], names: {} };
+      const months = [...Array(12)].map((_,i)=>i+1);
+      const box = document.getElementById('metrics_line_box');
+      const cw = Math.max(720, (box?.clientWidth || 760));
+      const W = cw, H = Math.round(cw * 0.38); // responsive height
+      const M = 48; // margin
+      const iw = W - M*2, ih = H - M*2;
+      const values = [];
+      (S.user||[]).forEach(v=>{ const f=Number(v); if(!isNaN(f)) values.push(f); });
+      (S.actual||[]).forEach(v=>{ const f=Number(v); if(!isNaN(f)) values.push(f); });
+      const maxV = Math.max(1, ...(values.length? values : [1]));
+      const minV = 0; // start at zero
+      const x = (i)=> M + (iw * (i/(Math.max(1, months.length-1))))
+      const y = (v)=> M + ih - (ih * ((Number(v||0)-minV)/(maxV-minV||1)))
+      function mkPath(arr){
+        let d=''; let lastDefined=false;
+        months.forEach((m, idx)=>{
+          const v = (arr||[])[idx];
+          if (v==null || isNaN(Number(v))) { lastDefined=false; return; }
+          const X=x(idx), Y=y(v);
+          if (!lastDefined) { d += `M ${X} ${Y}`; lastDefined=true; }
+          else { d += ` L ${X} ${Y}`; }
+        });
+        return d || 'M 0 0';
+      }
+      // grid lines (5 ticks)
+      const ticks = 5; let grid = '';
+      for(let i=0;i<=ticks;i++){
+        const v = minV + (maxV-minV)*(i/ticks);
+        const Y = y(v);
+        grid += `<line x1="${M}" y1="${Y}" x2="${W-M}" y2="${Y}" class="lc-grid" />`;
+        grid += `<text x="${W-M+6}" y="${Y+4}" fill="#94a3b8" font-size="12">${yen(v)}</text>`;
+      }
+      // x labels (months)
+      let xlabels='';
+      months.forEach((m, idx)=>{
+        const X = x(idx);
+        xlabels += `<text x="${X}" y="${H-10}" fill="#94a3b8" font-size="12" text-anchor="middle">${m}</text>`;
+      });
+      const pathActual = mkPath(S.actual);
+      const pathUser = mkPath(S.user);
+      // 差分ハイライト（両方ある月に縦帯 + 差のラベル）
+      let diffs='';
+      const segW = Math.max(12, iw/12*0.7);
+      // 最新のプロット月を特定
+      let lastIdx = -1;
+      for (let i=months.length-1;i>=0;i--){
+        const av = (S.actual||[])[i];
+        const uv = (S.user||[])[i];
+        if ((av!=null && !isNaN(Number(av))) || (uv!=null && !isNaN(Number(uv)))) { lastIdx = i; break; }
+      }
+      // フォーカス帯（最新月の背景ハイライト）
+      let focusBand='';
+      if (lastIdx >= 0){
+        const Xc = x(lastIdx);
+        const X = Xc - (segW*0.85);
+        focusBand = `<rect x="${X}" y="${M}" width="${segW*1.7}" height="${ih}" class="lc-focus" />`;
+      }
+      months.forEach((m, idx)=>{
+        const av = (S.actual||[])[idx];
+        const uv = (S.user||[])[idx];
+        if (av==null || uv==null || isNaN(Number(av)) || isNaN(Number(uv))) return;
+        const X = x(idx) - (segW/2); // 月の中心を基準に太い帯に
+        const top = y(Math.max(av, uv));
+        const bot = y(Math.min(av, uv));
+        const h = Math.max(2, bot - top);
+        diffs += `<rect x="${X}" y="${top}" width="${segW}" height="${h}" class="lc-band-diff"><title>${m}月 差:${yen(Math.abs(uv-av))}</title></rect>`;
+        // 差分ラベル（上側に小さく）
+        const labelY = top - 6;
+        diffs += `<text x="${X+segW/2}" y="${labelY}" text-anchor="middle" class="lc-diff-label">Δ${yen(Math.abs(uv-av))}</text>`;
+      });
+      // points + value labels + pulse for latest
+      let pts='';
+      let labels='';
+      let pulses='';
+      months.forEach((m, idx)=>{
+        const X=x(idx);
+        const name = (S.names||{})[String(idx+1)] || '';
+        const av = (S.actual||[])[idx];
+        const uv = (S.user||[])[idx];
+        if (av!=null && !isNaN(Number(av))) {
+          const Ya = y(av);
+          pts += `<g class="lc-point actual"><circle cx="${X}" cy="${Ya}" r="5" /><title>${m}月 実:${yen(av)}\n${name}</title></g>`;
+          labels += `<text class="lc-val actual ${idx===lastIdx?'highlight':''}" x="${X+10}" y="${Ya-6}">${yen(av)}</text>`;
+          if (idx===lastIdx){
+            pulses += `<g class="lc-pulse actual" transform="translate(${X},${Ya})"><circle class="pulse-ring" r="6" /></g>`;
+          }
+        }
+        if (uv!=null && !isNaN(Number(uv))) {
+          const Yu = y(uv);
+          pts += `<g class="lc-point alloc"><circle cx="${X}" cy="${Yu}" r="5" /><title>${m}月 想定:${yen(uv)}\n${name}</title></g>`;
+          labels += `<text class="lc-val alloc ${idx===lastIdx?'highlight':''}" x="${X+10}" y="${Yu+14}">${yen(uv)}</text>`;
+          if (idx===lastIdx){
+            pulses += `<g class="lc-pulse alloc" transform="translate(${X},${Yu})"><circle class="pulse-ring" r="6" /></g>`;
+          }
+        }
+      });
+      // defs: gradients + glow filters
+      const defs = `
+<defs>
+  <linearGradient id="gradActual" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#ffffff"/>
+    <stop offset="100%" stop-color="#e5e7eb"/>
+  </linearGradient>
+  <linearGradient id="gradAlloc" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#22d3ee"/>
+    <stop offset="100%" stop-color="#60a5fa"/>
+  </linearGradient>
+  <filter id="glowActual" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+    <feMerge>
+      <feMergeNode in="coloredBlur"/>
+      <feMergeNode in="SourceGraphic"/>
+    </feMerge>
+  </filter>
+  <filter id="glowAlloc" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+    <feMerge>
+      <feMergeNode in="coloredBlur"/>
+      <feMergeNode in="SourceGraphic"/>
+    </feMerge>
+  </filter>
+</defs>`;
+
+      return `
+<div class="linechart-legend">
+  <span><span class="box" style="background:#64748b"></span>実データ</span>
+  <span><span class="box" style="background:#60a5fa"></span>ユーザ想定予算</span>
+</div>
+<svg class="lc-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+  ${defs}
+  <rect x="0" y="0" width="${W}" height="${H}" fill="none" />
+  ${grid}
+  <line x1="${M}" y1="${M}" x2="${M}" y2="${H-M}" class="lc-axis" />
+  <line x1="${M}" y1="${H-M}" x2="${W-M}" y2="${H-M}" class="lc-axis" />
+  ${xlabels}
+  ${focusBand}
+  ${diffs}
+  <path d="${pathActual}" class="lc-line actual" stroke="url(#gradActual)" filter="url(#glowActual)" />
+  <path d="${pathUser}" class="lc-line alloc" stroke="url(#gradAlloc)" filter="url(#glowAlloc)" />
+  ${pulses}
+  ${pts}
+  ${labels}
+</svg>`;
+    }
   </script>
 </head>
-<body onload="loadOverview()">
+<body onload="loadOverview(); renderExamples()">
   <header class="header">
     <div class="header-content">
       <div class="app-title">Policy Game</div>
       <div class="header-actions">
         <button class="btn btn-outline" onclick="startGame()">ゲーム開始</button>
-        <button class="btn btn-outline" onclick="nextEventServer()">今月の事業を取得</button>
+        <button class="btn btn-outline" id="btn_next_month" onclick="nextMonth()" disabled aria-disabled="true" title="この月の事業に割当を行うと次へ進めます">次の月へ</button>
+        <span id="next_hint" class="next-hint">この月の事業に割当を行うと次へ進めます</span>
       </div>
     </div>
   </header>
 
   <main class="main-content">
+    <section class="card highlight-card">
+      <div class="card-title">予算の推移（ユーザ想定 vs 実）</div>
+      <div id="metrics_line_box" class="linechart-section"></div>
+    </section>
     <div class="two-column-layout">
       <section id="leftpane" class="card">
         <div class="card-title">今月の事業</div>
@@ -447,6 +797,7 @@
             <label for="input_gaiyo">事業の概要</label>
             <textarea id="input_gaiyo" rows="6" placeholder="事業の概要を入力"></textarea>
           </div>
+          <div id="examples_box" class="examples"></div>
           <div class="form-group">
             <label for="alloc_input">この事業への割当額（円）</label>
             <input type="number" id="alloc_input" placeholder="例: 5000000000" />
@@ -478,11 +829,14 @@
             </div>
           </div>
         </section>
+        
         <div class="actions" style="margin:8px 0">
           <button class="btn small" id="btn_show_actual" onclick="showActualThisMonth()">今月の事業の当初予算を確認</button>
           <span id="actual_month_box" class="muted" style="margin-left:8px"></span>
         </div>
         <div id="pred" class="projects-list"></div>
+
+        
       </section>
     </div>
 

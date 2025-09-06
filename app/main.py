@@ -6,6 +6,7 @@ from app.api.v1.state import router as state_router
 from app.api.v1.events import router as events_router
 from app.api.v1.budget import router as budget_router
 from app.core.config import settings
+from app.api.v1.metrics import router as metrics_router
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Policy Game API", version="0.1.0")
@@ -28,6 +29,7 @@ def favicon():
 app.include_router(state_router, prefix="/v1/state", tags=["state"])
 app.include_router(events_router, prefix="/v1/events", tags=["events"])
 app.include_router(budget_router, prefix="/v1", tags=["budget"])
+app.include_router(metrics_router, prefix="/v1/metrics", tags=["metrics"])
 
 # CORS
 _origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]

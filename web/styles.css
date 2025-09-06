@@ -104,3 +104,75 @@ input::placeholder, textarea::placeholder{color:#64748b}
 .simbar-fill{height:100%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-radius:999px}
 
 .site-footer{border-top:1px solid var(--border); padding:16px 0; margin-top:12px; background: rgba(15,23,42,.5)}
+
+/* Hints */
+.next-hint{ margin-left:8px; font-size:12px; color: var(--muted); }
+.next-hint.ok{ color: var(--success); }
+
+/* ---- Metrics Bar Chart ---- */
+.metrics-section { margin-top: 12px; }
+.metrics-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.metrics-label { width: 28px; text-align: right; font-size: 12px; color: #94a3b8; }
+.metrics-track { position: relative; flex: 1; height: 18px; background: #0b1020; border:1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.metrics-band { position: absolute; top: 0; height: 100%; background: rgba(34,197,94,.25); }
+.metrics-bar.actual { position: absolute; top: 3px; height: 12px; background: #64748b; border-radius: 3px; }
+.metrics-bar.alloc { position: absolute; top: 3px; height: 12px; background: #60a5fa; opacity: 0.9; border-radius: 3px; }
+.metrics-marker.ai { position: absolute; top: 0; width: 2px; height: 100%; background: #f59e0b; }
+.metrics-legend { display: flex; gap: 12px; align-items: center; font-size: 12px; color: #94a3b8; margin-top: 6px; }
+.metrics-legend .box { display: inline-block; width: 12px; height: 12px; margin-right: 4px; vertical-align: middle; }
+.metrics-values { width: 280px; font-size: 12px; color: #94a3b8; text-align: right; }
+
+/* ---- Line Chart (Year Trend) ---- */
+.linechart-section { margin-top: 16px; }
+.linechart-legend { display:flex; gap:12px; align-items:center; font-size:12px; color:#94a3b8; margin:6px 0; }
+.linechart-legend .box { display:inline-block; width:12px; height:12px; margin-right:4px; vertical-align:middle; }
+.lc-svg { width: 100%; height: auto; max-width: 1200px; }
+.lc-axis { stroke: #334155; stroke-width: 1; }
+.lc-grid { stroke: #1f2937; stroke-width: 1; opacity: .6; }
+.lc-line.actual { fill: none; stroke: #ffffff; stroke-width: 4.5; }
+.lc-line.alloc { fill: none; stroke: #22d3ee; stroke-width: 4.5; }
+.lc-band-diff { fill: rgba(239,68,68,.18); }
+.lc-diff-label { fill: #fca5a5; font-size: 10px; }
+.lc-point.actual { color: #ffffff; }
+.lc-point.alloc { color: #22d3ee; }
+.lc-point circle { stroke: #0b1020; stroke-width: 2; }
+.lc-val { font-size: 10px; fill: #e2e8f0; paint-order: stroke; stroke: #0b1020; stroke-width: 3; }
+.lc-val.alloc { fill: #99f6e4; }
+.lc-val.actual { fill: #e5e7eb; }
+.lc-val.highlight { font-size: 12px; font-weight: 700; }
+
+/* Pulse highlight for latest month */
+@keyframes lc-ring {
+  0% { transform: scale(1); opacity: .5; }
+  70% { transform: scale(2.2); opacity: 0; }
+  100% { opacity: 0; }
+}
+.lc-pulse { transform-box: fill-box; transform-origin: center; }
+.lc-pulse .pulse-ring { fill: none; stroke: currentColor; stroke-width: 2; opacity: .6; animation: lc-ring 1.8s ease-out infinite; }
+.lc-pulse.actual { color: #ffffff; }
+.lc-pulse.alloc { color: #22d3ee; }
+
+/* Focus band for latest segment */
+.lc-focus { fill: rgba(99,102,241,.12); }
+
+/* Emphasis card for line chart */
+.highlight-card{
+  border-color: #60a5fa;
+  box-shadow: 0 12px 40px rgba(56,189,248,.25), inset 0 0 0 1px rgba(96,165,250,.25);
+}
+.lc-point { fill: currentColor; }
+.lc-point.actual { color: #64748b; }
+.lc-point.alloc { color: #60a5fa; }
+
+/* ---- Examples Assist ---- */
+.examples { margin-top: 8px; }
+.examples-title { color: var(--muted); font-size: 12px; margin: 8px 0 6px; }
+.examples-grid { display: grid; grid-template-columns: 1fr; gap: 6px; }
+@media(min-width:860px){ .examples-grid{ grid-template-columns: 1fr 1fr; } }
+.example-card { border:1px solid var(--border); background:#0b1020; border-radius:10px; padding:10px; cursor:pointer; transition: transform .05s ease, border-color .15s ease; }
+.example-card:hover { transform: translateY(-1px); border-color: var(--accent); }
+.example-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+.example-text { color: var(--muted); font-size: 12px; line-height: 1.5; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient: vertical; overflow: hidden; }
+.example-actions { margin-top: 6px; display:flex; gap:8px; }
+.chip-btn { appearance:none; border:1px solid var(--border); background: rgba(255,255,255,.03); color: var(--text); padding:4px 8px; border-radius:999px; font-size:12px; cursor:pointer; }
+.chip-btn:hover { border-color: var(--accent); }

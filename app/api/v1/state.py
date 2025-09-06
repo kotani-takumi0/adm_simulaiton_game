@@ -50,9 +50,11 @@ def start(req: StartRequest | None = Body(default=None)):
         "year_budget_total": budget_per_year,
         "year_budget_remaining": budget_per_year,
         "events_per_year": events_per_year,           # ← 次年度遷移でも使う
-        "schedule": scheduled,                        # {year: [event_id,...]}
+        "schedule": scheduled,                        # {year: [event_id,...]}（消費用）
+        "timeline": {1: list(scheduled_ids)},         # {year: [event_id,...]}（固定順序）
         "done_events": set(),
         "allocations": {},
+        "alloc_log": [],                              # [{year, month, event_id, amount, ts}]
         "predictions": {},
         "scores": {},
     }
@@ -116,6 +118,8 @@ def next_year(session_id: str = Body(..., embed=True)):
         # データが尽きた場合、空のままにしておきクライアント側で処理
         next_ids = []
     session["schedule"][next_year] = next_ids
+    # タイムライン（固定順序）にも保存
+    session.setdefault("timeline", {})[next_year] = list(next_ids)
 
     return NextYearResponse(
         moved_to_year=next_year,

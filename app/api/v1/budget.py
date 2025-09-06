@@ -50,6 +50,27 @@ def allocate(req: AllocateRequest):
     session["allocations"][req.event_id] = new
     session["year_budget_remaining"] = remaining - delta
 
+    # 配分ログを追記（メモリ内永続）
+    try:
+        import datetime as _dt
+        year = int(session.get("year", 1))
+        # month: タイムラインから索引（1始まり）。見つからない場合は None
+        month = None
+        try:
+            tl = session.get("timeline", {}).get(year, [])
+            month = (tl.index(str(req.event_id)) + 1) if str(req.event_id) in tl else None
+        except Exception:
+            month = None
+        session.setdefault("alloc_log", []).append({
+            "ts": _dt.datetime.utcnow().isoformat() + "Z",
+            "year": year,
+            "month": month,
+            "event_id": str(req.event_id),
+            "amount": float(new),
+        })
+    except Exception:
+        pass
+
     return AllocateResponse(
         year=session["year"],
         year_budget_remaining=float(session["year_budget_remaining"]),
